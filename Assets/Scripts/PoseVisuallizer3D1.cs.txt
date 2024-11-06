@@ -1,0 +1,146 @@
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.UI;
+using Mediapipe.BlazePose;
+
+public class PoseVisuallizer3Dcopy : MonoBehaviour
+{
+    [SerializeField] Camera mainCamera;
+    [SerializeField] WebCamInput webCamInput;
+    [SerializeField] RawImage inputImageUI;
+    [SerializeField] Shader shader;
+    [SerializeField, Range(0, 1)] float humanExistThreshold = 0.5f;
+    public PoseMapper poseMapper;
+    public float ScaleX = 1.5f;
+    public float ScaleY = 0.6f;
+    public float ScaleZ = 1f;
+    public float Horizontal_angle = 75f;
+    public float Vertical_angle = 65f;
+    public float Mid_Z_limit = 0.5f;
+    PointcloudWithTimeBasedBackgroundnocolorcopy Pointcloud; //This will go wrong when not using the copy so watch out change the name to the name of the class in other script
+  
+    Material material;
+    BlazePoseDetecter detecter;
+    private Vector3[] mapperJoints = new Vector3[33];
+    private Vector3 Hip_Origin;
+    private Vector3 Shoulder_mid;
+    private Vector3 Torso_mid;
+    public Vector3 Shoulder_mid_public;
+    public Vector3 Hip_Origin_public;
+    public Vector3 Torso_mid_public;
+
+
+    // Lines count of body's topology.
+    const int BODY_LINE_NUM = 35;
+    // Pairs of vertex indices of the lines that make up body's topology.
+    // Defined by the figure in https://google.github.io/mediapipe/solutions/pose.
+    readonly List<Vector4> linePair = new List<Vector4>{
+        new Vector4(11, 12),
+        new Vector4(11, 13), new Vector4(13, 15), new Vector4(12, 14), new Vector4(14, 16), new Vector4(11, 23), new Vector4(12, 24), new Vector4(23, 24),
+        new Vector4(23, 25), new Vector4(25, 27), new Vector4(27, 29), new Vector4(29, 31), new Vector4(31, 27),
+        new Vector4(24, 26), new Vector4(26, 28), new Vector4(28, 30), new Vector4(30, 32), new Vector4(32, 28),
+        new Vector4(11, 24), new Vector4(12, 23) // Cross as spine
+    };
+
+    float[] exclusionIndices = new float[16] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 18, 20, 22, 17, 19, 21};  // Landmarks to exclude in the visualization
+    int exclusionCount = 16;  // Number of exclusions
+
+    void Start(){
+        material = new Material(shader);
+        material.SetFloatArray("exclusionIndices", exclusionIndices);
+        material.SetInt("exclusionCount", exclusionCount);
+        detecter = new BlazePoseDetecter(BlazePoseModel.lite);
+        Pointcloud = FindObjectOfType<PointcloudWithTimeBasedBackgroundnocolorcopy>(); //This will go wrong when not using the copy so watch out change the name to the name of the class in other script
+    }
+
+    void Update(){
+        //mainCamera.transform.RotateAround(Vector3.zero, Vector3.up, 0.1f);
+    }
+
+    void LateUpdate(){
+        inputImageUI.texture = webCamInput.inputImageTexture;
+
+        // Predict pose by neural network model.
+        detecter.ProcessImage(webCamInput.inputImageTexture);
+
+        //Get position of the center hip in the image
+        Hip_Origin = ((Vector3)detecter.GetPoseLandmark(23) + (Vector3)detecter.GetPoseLandmark(24)) / 2;
+        Shoulder_mid = ((Vector3)detecter.GetPoseLandmark(11) + (Vector3)detecter.GetPoseLandmark(12)) / 2;
+        Torso_mid = (Shoulder_mid + Hip_Origin) / 2;
+
+        // Output landmark values(33 values) and the score whether human pose is visible (1 values).
+        //for (int i = 0; i < detecter.vertexCount; i++){
+        //    /*
+        //    0~32 index datas are pose world landmark.
+        //    Check below Mediapipe document about relation between index and landmark position.
+        //    https://google.github.io/mediapipe/solutions/pose#pose-landmark-model-blazepose-ghum-3d
+        //    Each data factors are
+        //    x, y and z: Real-world 3D coordinates in meters with the origin at the center between hips.
+        //    w: The score of whether the world landmark position is visible ([0, 1]).
+
+        //    33 index data is the score whether human pose is visible ([0, 1]).
+        //    This data is (score, 0, 0, 0).
+        //    */
+        //    mapperJoints[i] = (Vector3)detecter.GetPoseWorldLandmark(i);
+
+        //    //Debug.LogFormat("{0}: {1}", i, mapperJoints[i]);
+        //}
+        ////Debug.Log("---");
+        //poseMapper.joints = mapperJoints;
+        
+        
+        //Set origin point of hip based on 2D RGB image
+        float Depthbuffer = 0f;
+
+        if (Pointcloud.MidHip_Z > Mid_Z_limit)
+        {
+            Depthbuffer = Pointcloud.MidHip_Z;
+        }
+        else
+        {
+            Depthbuffer = Pointcloud.average_z;
+        }
+
+        //Debug.Log("HIP before = " + Hip_Origin);
+
+        Hip_Origin = Calculate_Position(Hip_Origin, Depthbuffer);
+        Shoulder_mid = Calculate_Position(Shoulder_mid, Depthbuffer);
+        Torso_mid = Calculate_Position(Torso_mid, Depthbuffer);
+
+
+        Hip_Origin_public = Hip_Origin;
+        Shoulder_mid_public = Shoulder_mid;
+        Torso_mid_public = Torso_mid;
+    }
+
+    Vector3 Calculate_Position(Vector3 Origin, float depthdata)
+    {
+        Origin = Origin + new Vector3(-0.5f, -0.5f, depthdata);
+        Origin = Vector3.Scale(Origin, new Vector3(2 * depthdata * Mathf.Tan(Vertical_angle / 2 * Mathf.Deg2Rad) * ScaleX, 2 * depthdata * Mathf.Tan(Horizontal_angle / 2 * Mathf.Deg2Rad) * ScaleY, 1f * ScaleZ));
+        return Origin;
+    }
+
+    void OnRenderObject(){
+        // Use predicted pose world landmark results on the ComputeBuffer (GPU) memory.
+        material.SetBuffer("_worldVertices", detecter.worldLandmarkBuffer);
+        // Set pose landmark counts.
+        material.SetInt("_keypointCount", detecter.vertexCount);
+        material.SetFloat("_humanExistThreshold", humanExistThreshold);
+        material.SetVectorArray("_linePair", linePair);
+        material.SetMatrix("_invViewMatrix", mainCamera.worldToCameraMatrix.inverse);
+        material.SetVector("_predefinedTranslation", Hip_Origin);
+
+        // Draw 35 world body topology lines.
+        material.SetPass(2);
+        Graphics.DrawProceduralNow(MeshTopology.Triangles, 6, BODY_LINE_NUM);
+
+        // Draw 33 world landmark points.
+        material.SetPass(3);
+        Graphics.DrawProceduralNow(MeshTopology.Triangles, 6, detecter.vertexCount);
+    }
+
+    void OnApplicationQuit(){
+        // Must call Dispose method when no longer in use.
+        detecter.Dispose();
+    }
+}
